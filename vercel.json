@@ -1,12 +1,18 @@
 {
+  "version": 2,
+  "functions": {
+    "api/proxy.js": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
     {
       "source": "/",
-      "destination": "http://nl4.plugged.host:45340/"
+      "destination": "/api/proxy"
     },
     {
       "source": "/:path*",
-      "destination": "http://nl4.plugged.host:45340/:path*"
+      "destination": "/api/proxy?path=:path*"
     }
   ]
 }
