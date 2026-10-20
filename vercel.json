@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "http://nl4.plugged.host:45340/"
+    },
+    {
+      "source": "/:path*",
+      "destination": "http://nl4.plugged.host:45340/:path*"
+    }
+  ]
+}
