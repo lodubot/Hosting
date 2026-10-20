@@ -12,7 +12,7 @@
     },
     {
       "source": "/:path*",
-      "destination": "/api/proxy?path=:path*"
+      "destination": "/api/proxy"
     }
   ]
 }
