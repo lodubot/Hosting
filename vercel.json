@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "functions": { "api/proxy.js": { "maxDuration": 30 } },
+  "functions": { "api/proxy.js": { "maxDuration": 60 } },
   "rewrites": [
     { "source": "/", "destination": "/api/proxy?__vp=" },
     { "source": "/:__vp*", "destination": "/api/proxy?__vp=:__vp*" }
