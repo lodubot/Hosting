@@ -1,18 +1,8 @@
 {
   "version": 2,
-  "functions": {
-    "api/proxy.js": {
-      "maxDuration": 30
-    }
-  },
+  "functions": { "api/proxy.js": { "maxDuration": 30 } },
   "rewrites": [
-    {
-      "source": "/",
-      "destination": "/api/proxy"
-    },
-    {
-      "source": "/:path*",
-      "destination": "/api/proxy"
-    }
+    { "source": "/", "destination": "/api/proxy?__vp=" },
+    { "source": "/:__vp*", "destination": "/api/proxy?__vp=:__vp*" }
   ]
 }
