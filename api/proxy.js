@@ -5,47 +5,60 @@ export const config = {
   }
 };
 
+const BACKEND = "http://nl4.plugged.host:45340";
+
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
+
 export default async function handler(req, res) {
-  const TARGET = "http://nl4.plugged.host:45340";
-
   try {
-    // Original request ka path aur query preserve karo.
-    const originalUrl = new URL(req.url, "https://proxy.local");
-    let requestedPath = originalUrl.pathname;
+    const incoming = new URL(req.url, "https://proxy.local");
 
-    // /api/proxy endpoint ko backend ke root se map karo.
-    if (requestedPath === "/api/proxy") {
-      requestedPath = "/";
-    }
-
-    const targetUrl = new URL(
-      TARGET + requestedPath + originalUrl.search
-    );
+    // Vercel rewrite ke through aaya original path.
+    const target = new URL(BACKEND);
+    target.pathname = incoming.pathname === "/api/proxy"
+      ? "/"
+      : incoming.pathname;
+    target.search = incoming.search;
 
     const headers = new Headers();
 
-    for (const [name, value] of Object.entries(req.headers)) {
+    for (const [key, value] of Object.entries(req.headers)) {
+      const name = key.toLowerCase();
+
       if (
-        value &&
-        ![
-          "host",
-          "connection",
-          "content-length",
-          "transfer-encoding",
-          "accept-encoding"
-        ].includes(name.toLowerCase())
+        value == null ||
+        name === "host" ||
+        name === "content-length" ||
+        name === "accept-encoding" ||
+        name === "origin" ||
+        name === "referer" ||
+        HOP_BY_HOP.has(name)
       ) {
-        headers.set(
-          name,
-          Array.isArray(value) ? value.join(", ") : value
-        );
+        continue;
       }
+
+      headers.set(
+        key,
+        Array.isArray(value) ? value.join(", ") : value
+      );
     }
 
-    // Stream request body instead of buffering the entire upload.
+    // Backend ko proxy origin ke baare mein consistent context do.
+    headers.set("origin", BACKEND);
+    headers.set("referer", BACKEND + "/");
+
     const hasBody = !["GET", "HEAD"].includes(req.method);
 
-    const upstream = await fetch(targetUrl, {
+    const response = await fetch(target, {
       method: req.method,
       headers,
       body: hasBody ? req : undefined,
@@ -54,48 +67,42 @@ export default async function handler(req, res) {
       signal: AbortSignal.timeout(25000)
     });
 
-    res.statusCode = upstream.status;
+    res.statusCode = response.status;
 
-    // Forward response headers.
-    upstream.headers.forEach((value, name) => {
-      const lower = name.toLowerCase();
+    for (const [key, value] of response.headers.entries()) {
+      const name = key.toLowerCase();
 
       if (
-        ![
-          "connection",
-          "transfer-encoding",
-          "content-encoding",
-          "content-length"
-        ].includes(lower)
+        HOP_BY_HOP.has(name) ||
+        name === "content-encoding" ||
+        name === "content-length"
       ) {
-        res.setHeader(name, value);
+        continue;
       }
-    });
 
-    // Redirects may expose the backend hostname, so rewrite local redirects.
-    const location = upstream.headers.get("location");
+      // Rewrite backend redirects to stay on the proxy host.
+      if (name === "location") {
+        try {
+          const redirect = new URL(value, BACKEND);
 
-    if (location) {
-      try {
-        const redirectUrl = new URL(location, TARGET);
-
-        if (redirectUrl.hostname === "nl4.plugged.host") {
-          res.setHeader(
-            "location",
-            redirectUrl.pathname + redirectUrl.search + redirectUrl.hash
-          );
-        }
-      } catch {
-        // Keep the response even if Location is not a valid URL.
+          if (redirect.hostname === new URL(BACKEND).hostname) {
+            res.setHeader(
+              "Location",
+              redirect.pathname + redirect.search + redirect.hash
+            );
+            continue;
+          }
+        } catch {}
       }
+
+      res.setHeader(key, value);
     }
 
-    if (!upstream.body) {
+    if (!response.body) {
       return res.end();
     }
 
-    // Stream response back to the browser.
-    const reader = upstream.body.getReader();
+    const reader = response.body.getReader();
 
     while (true) {
       const { done, value } = await reader.read();
@@ -113,8 +120,8 @@ export default async function handler(req, res) {
 
     if (!res.headersSent) {
       res.status(502).json({
-        error: "Proxy request failed",
-        details: error.message
+        error: "Backend proxy failed",
+        message: error.message
       });
     } else {
       res.end();
