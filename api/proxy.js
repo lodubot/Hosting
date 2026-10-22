@@ -1,91 +1,118 @@
 export const config = {
-  api: { bodyParser: false, responseLimit: false },
-  maxDuration: 60
+  api: {
+    bodyParser: false,
+    responseLimit: false
+  }
 };
 
 const BACKEND = "http://nl4.plugged.host:45340";
 
-const HOP_BY_HOP = new Set([
-  "connection", "keep-alive", "proxy-authenticate",
-  "proxy-authorization", "te", "trailer",
-  "transfer-encoding", "upgrade"
+const HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+  "content-length",
+  "accept-encoding"
 ]);
 
 export default async function handler(req, res) {
   try {
     const incoming = new URL(req.url, "https://proxy.local");
+
+    // Original path aur query ko preserve karo.
     const target = new URL(BACKEND);
-    target.pathname = incoming.pathname === "/api/proxy" ? "/" : incoming.pathname;
+    target.pathname = incoming.pathname === "/api/proxy"
+      ? "/"
+      : incoming.pathname;
     target.search = incoming.search;
 
     const headers = new Headers();
+
     for (const [key, value] of Object.entries(req.headers)) {
-      const name = key.toLowerCase();
-      if (
-        value == null ||
-        name === "host" ||
-        name === "accept-encoding" ||
-        name === "origin" ||
-        name === "referer" ||
-        name.startsWith("x-vercel") ||
-        name.startsWith("x-forwarded") ||
-        HOP_BY_HOP.has(name)
-      ) continue;
-      // content-length ab forward hoga (upload ke liye zaroori)
-      headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+      if (value == null || HOP_HEADERS.has(key.toLowerCase())) {
+        continue;
+      }
+
+      headers.set(
+        key,
+        Array.isArray(value) ? value.join(", ") : value
+      );
     }
 
-    headers.set("origin", BACKEND);
-    headers.set("referer", BACKEND + "/");
-
     const hasBody = !["GET", "HEAD"].includes(req.method);
-    const isUpload = hasBody &&
-      (req.headers["content-type"] || "").includes("multipart/form-data");
 
-    const response = await fetch(target, {
+    const upstream = await fetch(target, {
       method: req.method,
       headers,
       body: hasBody ? req : undefined,
       duplex: hasBody ? "half" : undefined,
       redirect: "manual",
-      signal: AbortSignal.timeout(isUpload ? 55000 : 25000)
+      signal: AbortSignal.timeout(25000)
     });
 
-    res.statusCode = response.status;
+    res.statusCode = upstream.status;
 
-    for (const [key, value] of response.headers.entries()) {
+    upstream.headers.forEach((value, key) => {
       const name = key.toLowerCase();
-      if (HOP_BY_HOP.has(name) || name === "content-encoding" || name === "content-length") continue;
+
+      if (
+        HOP_HEADERS.has(name) ||
+        name === "content-encoding" ||
+        name === "content-length"
+      ) {
+        return;
+      }
 
       if (name === "location") {
         try {
-          const redirect = new URL(value, BACKEND);
-          if (redirect.hostname === new URL(BACKEND).hostname) {
-            res.setHeader("Location", redirect.pathname + redirect.search + redirect.hash);
-            continue;
+          const location = new URL(value, BACKEND);
+
+          if (location.hostname === "nl4.plugged.host") {
+            res.setHeader(
+              "Location",
+              location.pathname + location.search + location.hash
+            );
+            return;
           }
         } catch {}
       }
+
       res.setHeader(key, value);
+    });
+
+    if (!upstream.body) {
+      return res.end();
     }
 
-    if (!response.body) return res.end();
+    const reader = upstream.body.getReader();
 
-    const reader = response.body.getReader();
     while (true) {
       const { done, value } = await reader.read();
+
       if (done) break;
+
       if (!res.write(Buffer.from(value))) {
-        await new Promise(r => res.once("drain", r));
+        await new Promise(resolve => res.once("drain", resolve));
       }
     }
+
     res.end();
   } catch (error) {
-    console.error("Proxy error:", error);
+    console.error("Proxy failure:", error);
+
     if (!res.headersSent) {
-      res.status(502).json({ error: "Backend proxy failed", message: error.message });
+      res.status(502).json({
+        error: "Backend connection failed",
+        message: error.message
+      });
     } else {
       res.end();
     }
   }
-}
+        }
